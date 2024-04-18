@@ -5,10 +5,12 @@ package gcs
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"log"
 	"os"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -30,6 +32,7 @@ const (
 
 // See https://cloud.google.com/storage/docs/using-encryption-keys#generating_your_own_encryption_key
 const encryptionKey = "yRyCOikXi1ZDNE0xN3yiFsJjg7LGimoLrGFcLZgQoVk="
+const encryptionKey2 = "cRKXxV+HVAITvGlqxLJL8hZ95VTFHT2djkoRQjBpQls="
 
 // KMS key ring name and key name are hardcoded here and re-used because key rings (and keys) cannot be deleted
 // Test code asserts their presence and creates them if they're absent. They're not deleted at the end of tests.
@@ -41,6 +44,237 @@ const (
 )
 
 var keyRingLocation = os.Getenv("GOOGLE_REGION")
+
+func preCheckTestAcc(t *testing.T) {
+	if v := os.Getenv("TF_ACC"); v == "" {
+		t.Fatalf("TF_ACC must be set to run acceptance tests, as they provision real resources")
+	}
+}
+
+func TestBackendConfig_encryptionKey(t *testing.T) {
+
+	getWantValue := func(key string) []byte {
+		var want []byte
+		if key == "" {
+			want = nil
+		}
+		if key != "" {
+			var err error
+			want, err = base64.StdEncoding.DecodeString(key)
+			if err != nil {
+				t.Fatalf("error in test setup: %s", err.Error())
+			}
+		}
+		return want
+	}
+
+	cases := map[string]struct {
+		config map[string]interface{}
+		envs   map[string]string
+		want   []byte
+	}{
+		"unset in config and ENVs": {
+			config: map[string]interface{}{
+				"bucket": "foobar",
+			},
+			want: getWantValue(""),
+		},
+
+		"set in config only": {
+			config: map[string]interface{}{
+				"bucket":         "foobar",
+				"encryption_key": encryptionKey,
+			},
+			want: getWantValue(encryptionKey),
+		},
+
+		"set in config and GOOGLE_ENCRYPTION_KEY": {
+			config: map[string]interface{}{
+				"bucket":         "foobar",
+				"encryption_key": encryptionKey,
+			},
+			envs: map[string]string{
+				"GOOGLE_ENCRYPTION_KEY": encryptionKey2, // Different
+			},
+			want: getWantValue(encryptionKey),
+		},
+
+		"set in GOOGLE_ENCRYPTION_KEY only": {
+			config: map[string]interface{}{
+				"bucket": "foobar",
+			},
+			envs: map[string]string{
+				"GOOGLE_ENCRYPTION_KEY": encryptionKey2,
+			},
+			want: getWantValue(encryptionKey2),
+		},
+
+		"set in config as empty string and in GOOGLE_ENCRYPTION_KEY": {
+			config: map[string]interface{}{
+				"bucket":         "foobar",
+				"encryption_key": "",
+			},
+			envs: map[string]string{
+				"GOOGLE_ENCRYPTION_KEY": encryptionKey2,
+			},
+			want: getWantValue(encryptionKey2),
+		},
+	}
+
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			for k, v := range tc.envs {
+				t.Setenv(k, v)
+			}
+
+			b := backend.TestBackendConfig(t, New(), backend.TestWrapConfig(tc.config))
+			be := b.(*Backend)
+
+			if !reflect.DeepEqual(be.encryptionKey, tc.want) {
+				t.Fatalf("unexpected encryption_key value: wanted %v, got %v", tc.want, be.encryptionKey)
+			}
+		})
+	}
+}
+
+func TestBackendConfig_kmsKey(t *testing.T) {
+
+	cases := map[string]struct {
+		config map[string]interface{}
+		envs   map[string]string
+		want   string
+	}{
+		"unset in config and ENVs": {
+			config: map[string]interface{}{
+				"bucket": "foobar",
+			},
+		},
+
+		"set in config only": {
+			config: map[string]interface{}{
+				"bucket":             "foobar",
+				"kms_encryption_key": "value from config",
+			},
+			want: "value from config",
+		},
+
+		"set in config and GOOGLE_KMS_ENCRYPTION_KEY": {
+			config: map[string]interface{}{
+				"bucket":             "foobar",
+				"kms_encryption_key": "value from config",
+			},
+			envs: map[string]string{
+				"GOOGLE_KMS_ENCRYPTION_KEY": "value from GOOGLE_KMS_ENCRYPTION_KEY",
+			},
+			want: "value from config",
+		},
+
+		"set in GOOGLE_KMS_ENCRYPTION_KEY only": {
+			config: map[string]interface{}{
+				"bucket": "foobar",
+			},
+			envs: map[string]string{
+				"GOOGLE_KMS_ENCRYPTION_KEY": "value from GOOGLE_KMS_ENCRYPTION_KEY",
+			},
+			want: "value from GOOGLE_KMS_ENCRYPTION_KEY",
+		},
+
+		"set in config as empty string and in GOOGLE_KMS_ENCRYPTION_KEY": {
+			config: map[string]interface{}{
+				"bucket":             "foobar",
+				"kms_encryption_key": "",
+			},
+			envs: map[string]string{
+				"GOOGLE_KMS_ENCRYPTION_KEY": "value from GOOGLE_KMS_ENCRYPTION_KEY",
+			},
+			want: "value from GOOGLE_KMS_ENCRYPTION_KEY",
+		},
+	}
+
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			for k, v := range tc.envs {
+				t.Setenv(k, v)
+			}
+
+			b := backend.TestBackendConfig(t, New(), backend.TestWrapConfig(tc.config))
+			be := b.(*Backend)
+
+			if be.kmsKeyName != tc.want {
+				t.Fatalf("unexpected kms_encryption_key value: wanted %v, got %v", tc.want, be.kmsKeyName)
+			}
+		})
+	}
+}
+
+func TestAccBackendConfig_credentials(t *testing.T) {
+	preCheckTestAcc(t)
+	// Cannot use t.Parallel() due to t.Setenv
+
+	credentials := os.Getenv("GOOGLE_BACKEND_CREDENTIALS")
+	if credentials == "" {
+		credentials = os.Getenv("GOOGLE_CREDENTIALS")
+	}
+	if credentials == "" {
+		t.Fatalf("test requires credentials to be set as either GOOGLE_BACKEND_CREDENTIALS or GOOGLE_CREDENTIALS but neither is set")
+	}
+
+	t.Setenv("GOOGLE_BACKEND_CREDENTIALS", "") // unset value
+	t.Setenv("GOOGLE_CREDENTIALS", "")         // unset value
+
+	cases := map[string]struct {
+		config map[string]interface{}
+		envs   map[string]string
+		want   string
+	}{
+		"empty credentials in config doesn't affect use of GOOGLE_BACKEND_CREDENTIALS": {
+			config: map[string]interface{}{
+				"bucket":      "tf-test-testaccbackendconfig_credentials_1",
+				"credentials": "",
+			},
+			envs: map[string]string{
+				"GOOGLE_BACKEND_CREDENTIALS": credentials,
+			},
+		},
+		"empty credentials in config doesn't affect use of GOOGLE_CREDENTIALS": {
+			config: map[string]interface{}{
+				"bucket":      "tf-test-testaccbackendconfig_credentials_2",
+				"credentials": "",
+			},
+			envs: map[string]string{
+				"GOOGLE_CREDENTIALS": credentials,
+			},
+		},
+		// Uncomment below for sanity checking
+		// Testing with TestBackendConfig currently doesn't let us assert for errors, so instead
+		// run the below and expect it to fail.
+		// "nonsense in config causes an error and GOOGLE_CREDENTIALS isn't used": {
+		// 	config: map[string]interface{}{
+		// 		"bucket":      "tf-test-testaccbackendconfig_credentials_3",
+		// 		"credentials": "foobar",
+		// 	},
+		// 	envs: map[string]string{
+		// 		"GOOGLE_CREDENTIALS": credentials,
+		// 	},
+		// },
+	}
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			for k, v := range tc.envs {
+				t.Setenv(k, v)
+			}
+
+			be0 := setupBackend(t, tc.config)
+			defer teardownBackend(t, be0, noPrefix)
+
+			be1 := setupBackend(t, tc.config)
+
+			backend.TestBackendStates(t, be0)
+			backend.TestBackendStateLocks(t, be0, be1)
+		})
+	}
+
+}
 
 func TestStateFile(t *testing.T) {
 	t.Parallel()
@@ -71,30 +305,15 @@ func TestStateFile(t *testing.T) {
 	}
 }
 
-func TestRemoteClient(t *testing.T) {
+func TestAccRemoteClient(t *testing.T) {
+	preCheckTestAcc(t)
 	t.Parallel()
 
 	bucket := bucketName(t)
-	be := setupBackend(t, bucket, noPrefix, noEncryptionKey, noKmsKeyName)
-	defer teardownBackend(t, be, noPrefix)
-
-	ss, err := be.StateMgr(backend.DefaultStateName)
-	if err != nil {
-		t.Fatalf("be.StateMgr(%q) = %v", backend.DefaultStateName, err)
+	config := map[string]interface{}{
+		"bucket": bucket,
 	}
-
-	rs, ok := ss.(*remote.State)
-	if !ok {
-		t.Fatalf("be.StateMgr(): got a %T, want a *remote.State", ss)
-	}
-
-	remote.TestClient(t, rs.Client)
-}
-func TestRemoteClientWithEncryption(t *testing.T) {
-	t.Parallel()
-
-	bucket := bucketName(t)
-	be := setupBackend(t, bucket, noPrefix, encryptionKey, noKmsKeyName)
+	be := setupBackend(t, config)
 	defer teardownBackend(t, be, noPrefix)
 
 	ss, err := be.StateMgr(backend.DefaultStateName)
@@ -110,11 +329,40 @@ func TestRemoteClientWithEncryption(t *testing.T) {
 	remote.TestClient(t, rs.Client)
 }
 
-func TestRemoteLocks(t *testing.T) {
+func TestAccRemoteClientWithEncryption(t *testing.T) {
+	preCheckTestAcc(t)
 	t.Parallel()
 
 	bucket := bucketName(t)
-	be := setupBackend(t, bucket, noPrefix, noEncryptionKey, noKmsKeyName)
+	config := map[string]interface{}{
+		"bucket":         bucket,
+		"encryption_key": encryptionKey,
+	}
+	be := setupBackend(t, config)
+	defer teardownBackend(t, be, noPrefix)
+
+	ss, err := be.StateMgr(backend.DefaultStateName)
+	if err != nil {
+		t.Fatalf("be.StateMgr(%q) = %v", backend.DefaultStateName, err)
+	}
+
+	rs, ok := ss.(*remote.State)
+	if !ok {
+		t.Fatalf("be.StateMgr(): got a %T, want a *remote.State", ss)
+	}
+
+	remote.TestClient(t, rs.Client)
+}
+
+func TestAccRemoteLocks(t *testing.T) {
+	preCheckTestAcc(t)
+	t.Parallel()
+
+	bucket := bucketName(t)
+	config := map[string]interface{}{
+		"bucket": bucket,
+	}
+	be := setupBackend(t, config)
 	defer teardownBackend(t, be, noPrefix)
 
 	remoteClient := func() (remote.Client, error) {
@@ -143,50 +391,68 @@ func TestRemoteLocks(t *testing.T) {
 	remote.TestRemoteLocks(t, c0, c1)
 }
 
-func TestBackend(t *testing.T) {
+func TestAccBackend(t *testing.T) {
+	preCheckTestAcc(t)
 	t.Parallel()
 
 	bucket := bucketName(t)
 
-	be0 := setupBackend(t, bucket, noPrefix, noEncryptionKey, noKmsKeyName)
+	config := map[string]interface{}{
+		"bucket": bucket,
+	}
+	be0 := setupBackend(t, config)
 	defer teardownBackend(t, be0, noPrefix)
 
-	be1 := setupBackend(t, bucket, noPrefix, noEncryptionKey, noKmsKeyName)
+	be1 := setupBackend(t, config)
 
 	backend.TestBackendStates(t, be0)
 	backend.TestBackendStateLocks(t, be0, be1)
 	backend.TestBackendStateForceUnlock(t, be0, be1)
 }
 
-func TestBackendWithPrefix(t *testing.T) {
+func TestAccBackendWithPrefix(t *testing.T) {
+	preCheckTestAcc(t)
 	t.Parallel()
 
 	prefix := "test/prefix"
 	bucket := bucketName(t)
 
-	be0 := setupBackend(t, bucket, prefix, noEncryptionKey, noKmsKeyName)
+	config := map[string]interface{}{
+		"bucket":         bucket,
+		"prefix":         prefix,
+		"encryption_key": encryptionKey,
+	}
+	be0 := setupBackend(t, config)
 	defer teardownBackend(t, be0, prefix)
 
-	be1 := setupBackend(t, bucket, prefix+"/", noEncryptionKey, noKmsKeyName)
+	config["prefix"] = prefix + "/"
+	be1 := setupBackend(t, config)
 
 	backend.TestBackendStates(t, be0)
 	backend.TestBackendStateLocks(t, be0, be1)
 }
-func TestBackendWithCustomerSuppliedEncryption(t *testing.T) {
+
+func TestAccBackendWithCustomerSuppliedEncryption(t *testing.T) {
+	preCheckTestAcc(t)
 	t.Parallel()
 
 	bucket := bucketName(t)
 
-	be0 := setupBackend(t, bucket, noPrefix, encryptionKey, noKmsKeyName)
+	config := map[string]interface{}{
+		"bucket":         bucket,
+		"encryption_key": encryptionKey,
+	}
+	be0 := setupBackend(t, config)
 	defer teardownBackend(t, be0, noPrefix)
 
-	be1 := setupBackend(t, bucket, noPrefix, encryptionKey, noKmsKeyName)
+	be1 := setupBackend(t, config)
 
 	backend.TestBackendStates(t, be0)
 	backend.TestBackendStateLocks(t, be0, be1)
 }
 
-func TestBackendWithCustomerManagedKMSEncryption(t *testing.T) {
+func TestAccBackendWithCustomerManagedKMSEncryption(t *testing.T) {
+	preCheckTestAcc(t)
 	t.Parallel()
 
 	projectID := os.Getenv("GOOGLE_PROJECT")
@@ -202,17 +468,23 @@ func TestBackendWithCustomerManagedKMSEncryption(t *testing.T) {
 
 	kmsName := setupKmsKey(t, kmsDetails)
 
-	be0 := setupBackend(t, bucket, noPrefix, noEncryptionKey, kmsName)
+	config := map[string]interface{}{
+		"bucket":             bucket,
+		"prefix":             noPrefix,
+		"kms_encryption_key": kmsName,
+	}
+
+	be0 := setupBackend(t, config)
 	defer teardownBackend(t, be0, noPrefix)
 
-	be1 := setupBackend(t, bucket, noPrefix, noEncryptionKey, kmsName)
+	be1 := setupBackend(t, config)
 
 	backend.TestBackendStates(t, be0)
 	backend.TestBackendStateLocks(t, be0, be1)
 }
 
 // setupBackend returns a new GCS backend.
-func setupBackend(t *testing.T, bucket, prefix, key, kmsName string) backend.Backend {
+func setupBackend(t *testing.T, config map[string]interface{}) backend.Backend {
 	t.Helper()
 	ctx := context.Background()
 
@@ -223,24 +495,11 @@ func setupBackend(t *testing.T, bucket, prefix, key, kmsName string) backend.Bac
 			"the TF_ACC and GOOGLE_PROJECT environment variables are set.")
 	}
 
-	config := map[string]interface{}{
-		"bucket": bucket,
-		"prefix": prefix,
-	}
-	// Only add encryption keys to config if non-zero value set
-	// If not set here, default values are supplied in `TestBackendConfig` by `PrepareConfig` function call
-	if len(key) > 0 {
-		config["encryption_key"] = key
-	}
-	if len(kmsName) > 0 {
-		config["kms_encryption_key"] = kmsName
-	}
-
 	b := backend.TestBackendConfig(t, New(), backend.TestWrapConfig(config))
 	be := b.(*Backend)
 
 	// create the bucket if it doesn't exist
-	bkt := be.storageClient.Bucket(bucket)
+	bkt := be.storageClient.Bucket(config["bucket"].(string))
 	_, err := bkt.Attrs(ctx)
 	if err != nil {
 		if err != storage.ErrBucketNotExist {
