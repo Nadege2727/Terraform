@@ -159,15 +159,17 @@ func (i *ModuleInstaller) InstallModules(ctx context.Context, rootDir, testsDir 
 
 	cfg, instDiags, moduleDeprecations := i.installDescendentModules(ctx, rootMod, manifest, walker, installErrsOnly)
 	diags = append(diags, instDiags...)
-	workspaceDeprecations := &configs.WorkspaceDeprecations{
-		ModuleDeprecationInfos: moduleDeprecations,
+	if len(moduleDeprecations) != 0 {
+		workspaceDeprecations := &configs.WorkspaceDeprecations{
+			ModuleDeprecationInfos: moduleDeprecations,
+		}
+		deprecationString := workspaceDeprecations.BuildDeprecationWarningString()
+		diags = diags.Append(tfdiags.Sourceless(
+			tfdiags.Warning,
+			"Deprecated module versions found, consider installing updated versions",
+			deprecationString,
+		))
 	}
-	deprecationString := workspaceDeprecations.BuildDeprecationWarningString()
-	diags = diags.Append(tfdiags.Sourceless(
-		tfdiags.Warning,
-		"Deprecated module versions found, consider installing updated versions",
-		deprecationString,
-	))
 
 	return cfg, diags
 }

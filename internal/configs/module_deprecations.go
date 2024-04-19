@@ -20,7 +20,7 @@ type RegistryModuleDeprecation struct {
 func (i *WorkspaceDeprecations) BuildDeprecationWarningString() string {
 	modDeprecationStrings := []string{}
 	for _, modDeprecationInfo := range i.ModuleDeprecationInfos {
-		if modDeprecationInfo.RegistryDeprecation != nil {
+		if modDeprecationInfo != nil && modDeprecationInfo.RegistryDeprecation != nil {
 			// Link is an optional field, if unset it is an empty string by default
 			if modDeprecationInfo.RegistryDeprecation.Link != "" {
 				modDeprecationStrings = append(modDeprecationStrings, fmt.Sprintf("Version %s of \"%s\" \nTo learn more visit: %s\n", modDeprecationInfo.RegistryDeprecation.Version, modDeprecationInfo.SourceName, modDeprecationInfo.RegistryDeprecation.Link))
