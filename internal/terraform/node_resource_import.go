@@ -95,8 +95,9 @@ func (n *graphNodeImportState) Execute(ctx EvalContext, op walkOperation) (diags
 	}
 
 	resp := provider.ImportResourceState(providers.ImportResourceStateRequest{
-		TypeName: n.Addr.Resource.Resource.Type,
-		ID:       n.ID,
+		TypeName:        n.Addr.Resource.Resource.Type,
+		ID:              n.ID,
+		DeferralAllowed: false,
 	})
 	diags = diags.Append(resp.Diagnostics)
 	if diags.HasErrors() {
@@ -228,7 +229,7 @@ func (n *graphNodeImportStateSub) Execute(ctx EvalContext, op walkOperation) (di
 			ResolvedProvider: n.ResolvedProvider,
 		},
 	}
-	state, deferred, refreshDiags := riNode.refresh(ctx, states.NotDeposed, state)
+	state, deferred, refreshDiags := riNode.refresh(ctx, states.NotDeposed, state, false)
 	diags = diags.Append(refreshDiags)
 	if diags.HasErrors() {
 		return diags

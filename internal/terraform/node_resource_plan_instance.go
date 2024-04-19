@@ -205,7 +205,7 @@ func (n *NodePlannableResourceInstance) managedResourceExecute(ctx EvalContext) 
 	// Refresh, maybe
 	// The import process handles its own refresh
 	if !n.skipRefresh && !importing {
-		s, deferred, refreshDiags := n.refresh(ctx, states.NotDeposed, instanceRefreshState)
+		s, deferred, refreshDiags := n.refresh(ctx, states.NotDeposed, instanceRefreshState, ctx.Deferrals().DeferralAllowed())
 		diags = diags.Append(refreshDiags)
 		if diags.HasErrors() {
 			return diags
@@ -532,8 +532,9 @@ func (n *NodePlannableResourceInstance) importState(ctx EvalContext, addr addrs.
 		}
 	} else {
 		resp = provider.ImportResourceState(providers.ImportResourceStateRequest{
-			TypeName: addr.Resource.Resource.Type,
-			ID:       importId,
+			TypeName:        addr.Resource.Resource.Type,
+			ID:              importId,
+			DeferralAllowed: ctx.Deferrals().DeferralAllowed(),
 		})
 	}
 	diags = diags.Append(resp.Diagnostics)
@@ -542,21 +543,31 @@ func (n *NodePlannableResourceInstance) importState(ctx EvalContext, addr addrs.
 	}
 
 	imported := resp.ImportedResources
+	var importedState *states.ResourceInstanceObject
 
 	if len(imported) == 0 {
-		diags = diags.Append(tfdiags.Sourceless(
-			tfdiags.Error,
-			"Import returned no resources",
-			fmt.Sprintf("While attempting to import with ID %s, the provider"+
-				"returned no instance states.",
-				importId,
-			),
-		))
-		return nil, diags
+		if resp.Deferred == nil {
+			diags = diags.Append(tfdiags.Sourceless(
+				tfdiags.Error,
+				"Import returned no resources",
+				fmt.Sprintf("While attempting to import with ID %s, the provider"+
+					"returned no instance states.",
+					importId,
+				),
+			))
+			return nil, diags
+		} else {
+			importedState = &states.ResourceInstanceObject{
+				Value: cty.NullVal(schema.ImpliedType()),
+			}
+		}
+	} else {
+		importedState = imported[0].AsInstanceObject()
 	}
 	for _, obj := range imported {
 		log.Printf("[TRACE] graphNodeImportState: import %s %q produced instance object of type %s", absAddr.String(), importId, obj.TypeName)
 	}
+
 	if len(imported) > 1 {
 		diags = diags.Append(tfdiags.Sourceless(
 			tfdiags.Error,
@@ -567,30 +578,47 @@ func (n *NodePlannableResourceInstance) importState(ctx EvalContext, addr addrs.
 				importId,
 			),
 		))
+	}
+
+	// If the import was deferred we can't do more here
+	if resp.Deferred != nil {
+		ctx.Deferrals().ReportResourceInstanceDeferred(n.Addr, resp.Deferred.Reason, &plans.ResourceInstanceChange{
+			Addr: n.Addr,
+			Change: plans.Change{
+				Action: plans.NoOp,
+				Before: cty.UnknownVal(cty.DynamicPseudoType),
+				After:  cty.UnknownVal(cty.DynamicPseudoType),
+				Importing: &plans.Importing{
+					ID: importId,
+				},
+			},
+		})
 		return nil, diags
 	}
 
-	// call post-import hook
-	diags = diags.Append(ctx.Hook(func(h Hook) (HookAction, error) {
-		return h.PostPlanImport(hookResourceID, imported)
-	}))
+	// We can only call the hooks and validate the imported state if we have
+	// actually done the import.
+	if resp.Deferred == nil {
+		// call post-import hook
+		diags = diags.Append(ctx.Hook(func(h Hook) (HookAction, error) {
+			return h.PostPlanImport(hookResourceID, imported)
+		}))
 
-	if imported[0].TypeName == "" {
-		diags = diags.Append(fmt.Errorf("import of %s didn't set type", n.Addr.String()))
-		return nil, diags
-	}
+		if imported[0].TypeName == "" {
+			diags = diags.Append(fmt.Errorf("import of %s didn't set type", n.Addr.String()))
+			return nil, diags
+		}
 
-	importedState := imported[0].AsInstanceObject()
-
-	if importedState.Value.IsNull() {
-		diags = diags.Append(tfdiags.Sourceless(
-			tfdiags.Error,
-			"Import returned null resource",
-			fmt.Sprintf("While attempting to import with ID %s, the provider"+
-				"returned an instance with no state.",
-				n.importTarget.IDString,
-			),
-		))
+		if importedState.Value.IsNull() {
+			diags = diags.Append(tfdiags.Sourceless(
+				tfdiags.Error,
+				"Import returned null resource",
+				fmt.Sprintf("While attempting to import with ID %s, the provider"+
+					"returned an instance with no state.",
+					n.importTarget.IDString,
+				),
+			))
+		}
 	}
 
 	// refresh
@@ -601,14 +629,15 @@ func (n *NodePlannableResourceInstance) importState(ctx EvalContext, addr addrs.
 		},
 		override: n.override,
 	}
-	instanceRefreshState, deferred, refreshDiags := riNode.refresh(ctx, states.NotDeposed, importedState)
+	instanceRefreshState, refreshDeferred, refreshDiags := riNode.refresh(ctx, states.NotDeposed, importedState, ctx.Deferrals().DeferralAllowed())
 	diags = diags.Append(refreshDiags)
 	if diags.HasErrors() {
 		return instanceRefreshState, diags
 	}
 
-	if deferred != nil {
-		ctx.Deferrals().ReportResourceInstanceDeferred(n.Addr, deferred.Reason, &plans.ResourceInstanceChange{
+	// report the refresh was deferred, we don't need to error since the import step succeeded
+	if refreshDeferred != nil {
+		ctx.Deferrals().ReportResourceInstanceDeferred(n.Addr, refreshDeferred.Reason, &plans.ResourceInstanceChange{
 			Addr: n.Addr,
 			Change: plans.Change{
 				Action: plans.Read,
@@ -618,7 +647,7 @@ func (n *NodePlannableResourceInstance) importState(ctx EvalContext, addr addrs.
 	}
 
 	// verify the existence of the imported resource
-	if instanceRefreshState.Value.IsNull() && deferred == nil {
+	if instanceRefreshState.Value.IsNull() && refreshDeferred == nil {
 		var diags tfdiags.Diagnostics
 		diags = diags.Append(tfdiags.Sourceless(
 			tfdiags.Error,
