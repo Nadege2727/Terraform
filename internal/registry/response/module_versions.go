@@ -20,9 +20,15 @@ type ModuleProviderVersions struct {
 // ModuleVersion is the output metadata for a given version needed by CLI to
 // resolve candidate versions to satisfy requirements.
 type ModuleVersion struct {
-	Version    string              `json:"version"`
-	Root       VersionSubmodule    `json:"root"`
-	Submodules []*VersionSubmodule `json:"submodules"`
+	Version     string              `json:"version"`
+	Root        VersionSubmodule    `json:"root"`
+	Submodules  []*VersionSubmodule `json:"submodules"`
+	Deprecation *Deprecation        `json:"deprecation"`
+}
+
+type Deprecation struct {
+	Reason string `json:"reason"`
+	Link   string `json:"link"`
 }
 
 // VersionSubmodule is the output metadata for a submodule within a given

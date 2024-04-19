@@ -4,6 +4,7 @@
 package configs
 
 import (
+	"context"
 	"fmt"
 	"io/ioutil"
 	"path"
@@ -29,8 +30,8 @@ func TestBuildConfig(t *testing.T) {
 	}
 
 	versionI := 0
-	cfg, diags := BuildConfig(mod, ModuleWalkerFunc(
-		func(req *ModuleRequest) (*Module, *version.Version, hcl.Diagnostics) {
+	cfg, diags, _ := BuildConfig(context.Background(), mod, ModuleWalkerFunc(
+		func(ctx context.Context, req *ModuleRequest) (*Module, *version.Version, hcl.Diagnostics, *ModuleDeprecationInfo) {
 			// For the sake of this test we're going to just treat our
 			// SourceAddr as a path relative to our fixture directory.
 			// A "real" implementation of ModuleWalker should accept the
@@ -40,7 +41,7 @@ func TestBuildConfig(t *testing.T) {
 			mod, diags := parser.LoadConfigDir(sourcePath)
 			version, _ := version.NewVersion(fmt.Sprintf("1.0.%d", versionI))
 			versionI++
-			return mod, version, diags
+			return mod, version, diags, nil
 		}),
 		MockDataLoaderFunc(func(provider *Provider) (*MockData, hcl.Diagnostics) {
 			return nil, nil
@@ -88,8 +89,8 @@ func TestBuildConfigDiags(t *testing.T) {
 	}
 
 	versionI := 0
-	cfg, diags := BuildConfig(mod, ModuleWalkerFunc(
-		func(req *ModuleRequest) (*Module, *version.Version, hcl.Diagnostics) {
+	cfg, diags, _ := BuildConfig(context.Background(), mod, ModuleWalkerFunc(
+		func(ctx context.Context, req *ModuleRequest) (*Module, *version.Version, hcl.Diagnostics, *ModuleDeprecationInfo) {
 			// For the sake of this test we're going to just treat our
 			// SourceAddr as a path relative to our fixture directory.
 			// A "real" implementation of ModuleWalker should accept the
@@ -99,7 +100,7 @@ func TestBuildConfigDiags(t *testing.T) {
 			mod, diags := parser.LoadConfigDir(sourcePath)
 			version, _ := version.NewVersion(fmt.Sprintf("1.0.%d", versionI))
 			versionI++
-			return mod, version, diags
+			return mod, version, diags, nil
 		}),
 		MockDataLoaderFunc(func(provider *Provider) (*MockData, hcl.Diagnostics) {
 			return nil, nil
@@ -135,8 +136,8 @@ func TestBuildConfigChildModuleBackend(t *testing.T) {
 		t.Fatal("got nil root module; want non-nil")
 	}
 
-	cfg, diags := BuildConfig(mod, ModuleWalkerFunc(
-		func(req *ModuleRequest) (*Module, *version.Version, hcl.Diagnostics) {
+	cfg, diags, _ := BuildConfig(context.Background(), mod, ModuleWalkerFunc(
+		func(ctx context.Context, req *ModuleRequest) (*Module, *version.Version, hcl.Diagnostics, *ModuleDeprecationInfo) {
 			// For the sake of this test we're going to just treat our
 			// SourceAddr as a path relative to our fixture directory.
 			// A "real" implementation of ModuleWalker should accept the
@@ -145,7 +146,7 @@ func TestBuildConfigChildModuleBackend(t *testing.T) {
 
 			mod, diags := parser.LoadConfigDir(sourcePath)
 			version, _ := version.NewVersion("1.0.0")
-			return mod, version, diags
+			return mod, version, diags, nil
 		}),
 		MockDataLoaderFunc(func(provider *Provider) (*MockData, hcl.Diagnostics) {
 			return nil, nil
@@ -216,14 +217,14 @@ func TestBuildConfigInvalidModules(t *testing.T) {
 			expectedErrs := readDiags(ioutil.ReadFile(filepath.Join(testDir, name, "errors")))
 			expectedWarnings := readDiags(ioutil.ReadFile(filepath.Join(testDir, name, "warnings")))
 
-			_, buildDiags := BuildConfig(mod, ModuleWalkerFunc(
-				func(req *ModuleRequest) (*Module, *version.Version, hcl.Diagnostics) {
+			_, buildDiags, _ := BuildConfig(context.Background(), mod, ModuleWalkerFunc(
+				func(ctx context.Context, req *ModuleRequest) (*Module, *version.Version, hcl.Diagnostics, *ModuleDeprecationInfo) {
 					// for simplicity, these tests will treat all source
 					// addresses as relative to the root module
 					sourcePath := filepath.Join(path, req.SourceAddr.String())
 					mod, diags := parser.LoadConfigDir(sourcePath)
 					version, _ := version.NewVersion("1.0.0")
-					return mod, version, diags
+					return mod, version, diags, nil
 				}),
 				MockDataLoaderFunc(func(provider *Provider) (*MockData, hcl.Diagnostics) {
 					return nil, nil
@@ -306,7 +307,7 @@ func TestBuildConfig_WithMockDataSources(t *testing.T) {
 		t.Fatal("got nil root module; want non-nil")
 	}
 
-	cfg, diags := BuildConfig(mod, nil, MockDataLoaderFunc(func(provider *Provider) (*MockData, hcl.Diagnostics) {
+	cfg, diags, _ := BuildConfig(context.Background(), mod, nil, MockDataLoaderFunc(func(provider *Provider) (*MockData, hcl.Diagnostics) {
 		sourcePath := filepath.Join("testdata/valid-modules/with-mock-sources", provider.MockDataExternalSource)
 		return parser.LoadMockDataDir(sourcePath, hcl.Range{})
 	}))
@@ -337,7 +338,7 @@ func TestBuildConfig_WithMockDataSourcesInline(t *testing.T) {
 		t.Fatal("got nil root module; want non-nil")
 	}
 
-	cfg, diags := BuildConfig(mod, nil, MockDataLoaderFunc(func(provider *Provider) (*MockData, hcl.Diagnostics) {
+	cfg, diags, _ := BuildConfig(context.Background(), mod, nil, MockDataLoaderFunc(func(provider *Provider) (*MockData, hcl.Diagnostics) {
 		sourcePath := filepath.Join("testdata/valid-modules/with-mock-sources-inline", provider.MockDataExternalSource)
 		return parser.LoadMockDataDir(sourcePath, hcl.Range{})
 	}))
@@ -368,8 +369,8 @@ func TestBuildConfig_WithNestedTestModules(t *testing.T) {
 		t.Fatal("got nil root module; want non-nil")
 	}
 
-	cfg, diags := BuildConfig(mod, ModuleWalkerFunc(
-		func(req *ModuleRequest) (*Module, *version.Version, hcl.Diagnostics) {
+	cfg, diags, _ := BuildConfig(context.Background(), mod, ModuleWalkerFunc(
+		func(ctx context.Context, req *ModuleRequest) (*Module, *version.Version, hcl.Diagnostics, *ModuleDeprecationInfo) {
 
 			// Bit of a hack to get the test working, but we know all the source
 			// addresses in this test are locals, so we can just treat them as
@@ -385,7 +386,7 @@ func TestBuildConfig_WithNestedTestModules(t *testing.T) {
 
 			mod, diags := parser.LoadConfigDir(sourcePath)
 			version, _ := version.NewVersion("1.0.0")
-			return mod, version, diags
+			return mod, version, diags, nil
 		}),
 		MockDataLoaderFunc(func(provider *Provider) (*MockData, hcl.Diagnostics) {
 			return nil, nil
@@ -451,8 +452,8 @@ func TestBuildConfig_WithTestModule(t *testing.T) {
 		t.Fatal("got nil root module; want non-nil")
 	}
 
-	cfg, diags := BuildConfig(mod, ModuleWalkerFunc(
-		func(req *ModuleRequest) (*Module, *version.Version, hcl.Diagnostics) {
+	cfg, diags, _ := BuildConfig(context.Background(), mod, ModuleWalkerFunc(
+		func(ctx context.Context, req *ModuleRequest) (*Module, *version.Version, hcl.Diagnostics, *ModuleDeprecationInfo) {
 			// For the sake of this test we're going to just treat our
 			// SourceAddr as a path relative to our fixture directory.
 			// A "real" implementation of ModuleWalker should accept the
@@ -461,7 +462,7 @@ func TestBuildConfig_WithTestModule(t *testing.T) {
 
 			mod, diags := parser.LoadConfigDir(sourcePath)
 			version, _ := version.NewVersion("1.0.0")
-			return mod, version, diags
+			return mod, version, diags, nil
 		}),
 		MockDataLoaderFunc(func(provider *Provider) (*MockData, hcl.Diagnostics) {
 			return nil, nil

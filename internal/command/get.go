@@ -42,7 +42,7 @@ func (c *GetCommand) Run(args []string) int {
 	}
 
 	path = c.normalizePath(path)
-
+	// mdTODO: do I need to come back here and handle the deprecations? Could be useful even if not directly in scope.
 	abort, diags := getModules(ctx, &c.Meta, path, testsDirectory, update)
 	c.showDiagnostics(diags)
 	if abort || diags.HasErrors() {
