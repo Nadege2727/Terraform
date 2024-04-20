@@ -14,6 +14,7 @@ import (
 	"github.com/zclconf/go-cty/cty"
 
 	"github.com/hashicorp/terraform/internal/addrs"
+	"github.com/hashicorp/terraform/internal/collections"
 	"github.com/hashicorp/terraform/internal/configs"
 	"github.com/hashicorp/terraform/internal/instances"
 	"github.com/hashicorp/terraform/internal/lang"
@@ -272,10 +273,24 @@ The -target option is not for routine use, and is provided only for exceptional 
 	// convert the variables into the format expected for the plan
 	varVals := make(map[string]plans.DynamicValue, len(opts.SetVariables))
 	varMarks := make(map[string][]cty.PathValueMarks, len(opts.SetVariables))
+	applyTimeVariables := collections.NewSetCmp[string]()
 	for k, iv := range opts.SetVariables {
 		if iv.Value == cty.NilVal {
 			continue // We only record values that the caller actually set
 		}
+
+		// If any input variables were declared as ephemeral and set to a
+		// non-null value then those variables must be provided again (possibly
+		// with _different_ non-null values) during the apply phase.
+		if vc, ok := config.Module.Variables[k]; ok && vc.Ephemeral {
+			if !iv.Value.IsNull() {
+				applyTimeVariables.Add(k)
+			}
+			continue
+		}
+
+		// Non-ephemeral variables must remain unchanged between plan and
+		// apply, so we'll record their actual values.
 
 		// Root variable values arriving from the traditional CLI path are
 		// unmarked, as they are directly decoded from .tfvars, CLI arguments,
